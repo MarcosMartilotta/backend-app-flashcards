@@ -20,6 +20,40 @@ app.get('/health', async (req, res) => {
     }
 });
 
+
+app.get('/cards', async (req, res) => {
+    try {
+        const [rows] = await pool.query('SELECT * FROM cards');
+        res.json(rows);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/cards', async (req, res) => {
+    const { pregunta, respuesta } = req.body;
+    try {
+        const [result] = await pool.query('INSERT INTO cards (pregunta, respuesta) VALUES (?, ?)', [pregunta, respuesta]);
+        res.json({ id: result.insertId, pregunta, respuesta });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.put('/cards/:id', async (req, res) => {
+    const { id } = req.params;
+    const { pregunta, respuesta } = req.body;
+    try {
+        await pool.query('UPDATE cards SET pregunta = ?, respuesta = ? WHERE id = ?', [pregunta, respuesta, id]);
+        res.json({ id, pregunta, respuesta });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.listen(3000, '0.0.0.0', () => {
     console.log('API running on port 3000');
 });
