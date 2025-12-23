@@ -115,18 +115,42 @@ app.get('/cards', authenticateToken, async (req, res) => {
 
 app.post('/cards', authenticateToken, async (req, res) => {
     const { pregunta, respuesta } = req.body;
+    const userId = req.user.id;
+
+    if (!pregunta?.trim() || !respuesta?.trim()) {
+        return res.status(400).json({ error: 'Pregunta and respuesta are required' });
+    }
+
+    const connection = await pool.getConnection();
     try {
-        const [result] = await pool.query('INSERT INTO cards (pregunta, respuesta) VALUES (?, ?)', [pregunta, respuesta]);
-        res.json({ id: result.insertId, pregunta, respuesta });
+        await connection.beginTransaction();
+
+        // 1. Insert global card
+        const [result] = await connection.query('INSERT INTO cards (pregunta, respuesta) VALUES (?, ?)', [pregunta, respuesta]);
+        const cardId = result.insertId;
+
+        // 2. Associate with creator as active
+        await connection.query('INSERT INTO user_cards (user_id, card_id, is_active) VALUES (?, ?, ?)', [userId, cardId, 1]);
+
+        await connection.commit();
+        res.json({ id: cardId, pregunta, respuesta, is_active: 1 });
     } catch (err) {
+        if (connection) await connection.rollback();
         console.error("POST /cards error:", err);
         res.status(500).json({ error: err.message });
+    } finally {
+        if (connection) connection.release();
     }
 });
 
 app.put('/cards/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
     const { pregunta, respuesta } = req.body;
+
+    if (!pregunta?.trim() || !respuesta?.trim()) {
+        return res.status(400).json({ error: 'Pregunta and respuesta are required' });
+    }
+
     try {
         await pool.query('UPDATE cards SET pregunta = ?, respuesta = ? WHERE id = ?', [pregunta, respuesta, id]);
         res.json({ id, pregunta, respuesta });
