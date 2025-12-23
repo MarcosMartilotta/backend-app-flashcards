@@ -1,17 +1,30 @@
 const express = require('express');
 const mysql = require('mysql2/promise');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 
 const app = express();
 app.use(express.json());
 
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
+// --- CORS ---
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    if (req.method === 'OPTIONS') {
+        return res.status(200).send();
+    }
+    next();
+});
 
 const pool = mysql.createPool({
     host: process.env.DB_HOST,
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME,
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0
 });
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-very-secret-key';
@@ -35,17 +48,12 @@ const authenticateToken = (req, res, next) => {
 app.post('/auth/register', async (req, res) => {
     const { email, name, password } = req.body;
     try {
-        // Encriptar contraseña
         const password_hash = await bcrypt.hash(password, 10);
-
         const [result] = await pool.query(
             'INSERT INTO users (email, name, password_hash) VALUES (?, ?, ?)',
             [email, name, password_hash]
         );
-
-        // Generar token
         const token = jwt.sign({ id: result.insertId, email }, JWT_SECRET, { expiresIn: '30d' });
-
         res.status(201).json({
             message: 'User created successfully',
             token,
@@ -64,19 +72,11 @@ app.post('/auth/login', async (req, res) => {
     const { email, password } = req.body;
     try {
         const [rows] = await pool.query('SELECT * FROM users WHERE email = ?', [email]);
-        if (rows.length === 0) {
-            return res.status(401).json({ error: 'Invalid credentials' });
-        }
-
+        if (rows.length === 0) return res.status(401).json({ error: 'Invalid credentials' });
         const user = rows[0];
         const isMatch = await bcrypt.compare(password, user.password_hash);
-
-        if (!isMatch) {
-            return res.status(401).json({ error: 'Invalid credentials' });
-        }
-
+        if (!isMatch) return res.status(401).json({ error: 'Invalid credentials' });
         const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '30d' });
-
         res.json({
             token,
             user: { id: user.id, email: user.email, name: user.name }
@@ -87,16 +87,16 @@ app.post('/auth/login', async (req, res) => {
     }
 });
 
-
 app.get('/health', async (req, res) => {
     try {
-        const [rows] = await pool.query('SELECT 1');
+        await pool.query('SELECT 1');
         res.json({ status: 'ok', db: 'connected' });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
+// --- CARD ENDPOINTS ---
 
 app.get('/cards', authenticateToken, async (req, res) => {
     const userId = req.user.id;
@@ -108,18 +108,18 @@ app.get('/cards', authenticateToken, async (req, res) => {
         `, [userId]);
         res.json(rows);
     } catch (err) {
-        console.error(err);
+        console.error("GET /cards error:", err);
         res.status(500).json({ error: err.message });
     }
 });
 
-app.post('/cards', async (req, res) => {
+app.post('/cards', authenticateToken, async (req, res) => {
     const { pregunta, respuesta } = req.body;
     try {
         const [result] = await pool.query('INSERT INTO cards (pregunta, respuesta) VALUES (?, ?)', [pregunta, respuesta]);
         res.json({ id: result.insertId, pregunta, respuesta });
     } catch (err) {
-        console.error(err);
+        console.error("POST /cards error:", err);
         res.status(500).json({ error: err.message });
     }
 });
@@ -131,14 +131,14 @@ app.put('/cards/:id', authenticateToken, async (req, res) => {
         await pool.query('UPDATE cards SET pregunta = ?, respuesta = ? WHERE id = ?', [pregunta, respuesta, id]);
         res.json({ id, pregunta, respuesta });
     } catch (err) {
-        console.error(err);
+        console.error("PUT /cards/:id error:", err);
         res.status(500).json({ error: err.message });
     }
 });
 
 app.post('/cards/:id/toggle-archive', authenticateToken, async (req, res) => {
     const { id } = req.params;
-    const { is_active } = req.body; // 1 for active, 0 for learned/archived
+    const { is_active } = req.body;
     const userId = req.user.id;
     try {
         await pool.query(`
@@ -148,7 +148,30 @@ app.post('/cards/:id/toggle-archive', authenticateToken, async (req, res) => {
         `, [userId, id, is_active]);
         res.json({ success: true, card_id: id, is_active });
     } catch (err) {
-        console.error(err);
+        console.error("POST /toggle-archive error:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/cards/batch-archive', authenticateToken, async (req, res) => {
+    const { updates } = req.body;
+    const userId = req.user.id;
+
+    if (!Array.isArray(updates) || updates.length === 0) {
+        return res.status(400).json({ error: 'Updates must be a non-empty array' });
+    }
+
+    try {
+        const sql = `
+            INSERT INTO user_cards (user_id, card_id, is_active) 
+            VALUES ? 
+            ON DUPLICATE KEY UPDATE is_active = VALUES(is_active)
+        `;
+        const values = updates.map(u => [userId, u.card_id, u.is_active]);
+        await pool.query(sql, [values]);
+        res.json({ success: true, count: updates.length });
+    } catch (err) {
+        console.error("POST /batch-archive error:", err);
         res.status(500).json({ error: err.message });
     }
 });
