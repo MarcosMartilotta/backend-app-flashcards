@@ -43,21 +43,36 @@ const authenticateToken = (req, res, next) => {
     });
 };
 
+const generateToken = (user) => {
+    return jwt.sign({
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        depende: user.depende,
+        clase: user.clase
+    }, JWT_SECRET, { expiresIn: '30d' });
+};
+
 // --- AUTH ENDPOINTS ---
 
 app.post('/auth/register', async (req, res) => {
     const { email, name, password } = req.body;
     try {
         const password_hash = await bcrypt.hash(password, 10);
+        // Default values for new registers
         const [result] = await pool.query(
-            'INSERT INTO users (email, name, password_hash) VALUES (?, ?, ?)',
-            [email, name, password_hash]
+            'INSERT INTO users (email, name, password_hash, role) VALUES (?, ?, ?, ?)',
+            [email, name, password_hash, 'student']
         );
-        const token = jwt.sign({ id: result.insertId, email }, JWT_SECRET, { expiresIn: '30d' });
+
+        const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [result.insertId]);
+        const user = rows[0];
+        const token = generateToken(user);
+
         res.status(201).json({
             message: 'User created successfully',
             token,
-            user: { id: result.insertId, email, name }
+            user: { id: user.id, email: user.email, name: user.name, role: user.role }
         });
     } catch (err) {
         if (err.code === 'ER_DUP_ENTRY') {
@@ -76,10 +91,18 @@ app.post('/auth/login', async (req, res) => {
         const user = rows[0];
         const isMatch = await bcrypt.compare(password, user.password_hash);
         if (!isMatch) return res.status(401).json({ error: 'Invalid credentials' });
-        const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '30d' });
+
+        const token = generateToken(user);
         res.json({
             token,
-            user: { id: user.id, email: user.email, name: user.name }
+            user: {
+                id: user.id,
+                email: user.email,
+                name: user.name,
+                role: user.role,
+                depende: user.depende,
+                clase: user.clase
+            }
         });
     } catch (err) {
         console.error(err);
@@ -87,25 +110,28 @@ app.post('/auth/login', async (req, res) => {
     }
 });
 
-app.get('/health', async (req, res) => {
-    try {
-        await pool.query('SELECT 1');
-        res.json({ status: 'ok', db: 'connected' });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
 // --- CARD ENDPOINTS ---
 
 app.get('/cards', authenticateToken, async (req, res) => {
-    const userId = req.user.id;
+    const { id: userId, role, depende, clase } = req.user;
     try {
-        const [rows] = await pool.query(`
-            SELECT c.*, COALESCE(uc.is_active, 1) as is_active 
+        let sql = `
+            SELECT DISTINCT c.*, COALESCE(uc.is_active, 1) as is_active 
             FROM cards c
             LEFT JOIN user_cards uc ON c.id = uc.card_id AND uc.user_id = ?
-        `, [userId]);
+            WHERE uc.user_id = ? 
+        `;
+        let params = [userId, userId];
+
+        if (role === 'student' && depende) {
+            sql += ` OR (c.teacher_id = ? AND c.clase = ?) `;
+            params.push(depende, clase);
+        } else if (role === 'teacher') {
+            sql += ` OR (c.teacher_id = ?) `;
+            params.push(userId);
+        }
+
+        const [rows] = await pool.query(sql, params);
         res.json(rows);
     } catch (err) {
         console.error("GET /cards error:", err);
@@ -114,8 +140,8 @@ app.get('/cards', authenticateToken, async (req, res) => {
 });
 
 app.post('/cards', authenticateToken, async (req, res) => {
-    const { pregunta, respuesta } = req.body;
-    const userId = req.user.id;
+    const { pregunta, respuesta, selectedClase } = req.body;
+    const { id: userId, role } = req.user;
 
     if (!pregunta?.trim() || !respuesta?.trim()) {
         return res.status(400).json({ error: 'Pregunta and respuesta are required' });
@@ -125,15 +151,20 @@ app.post('/cards', authenticateToken, async (req, res) => {
     try {
         await connection.beginTransaction();
 
-        // 1. Insert global card
-        const [result] = await connection.query('INSERT INTO cards (pregunta, respuesta) VALUES (?, ?)', [pregunta, respuesta]);
+        // If teacher, save teacher_id and clase
+        const teacherId = role === 'teacher' ? userId : null;
+        const cardClase = (role === 'teacher' && selectedClase) ? selectedClase : null;
+
+        const [result] = await connection.query(
+            'INSERT INTO cards (pregunta, respuesta, teacher_id, clase) VALUES (?, ?, ?, ?)',
+            [pregunta, respuesta, teacherId, cardClase]
+        );
         const cardId = result.insertId;
 
-        // 2. Associate with creator as active
         await connection.query('INSERT INTO user_cards (user_id, card_id, is_active) VALUES (?, ?, ?)', [userId, cardId, 1]);
 
         await connection.commit();
-        res.json({ id: cardId, pregunta, respuesta, is_active: 1 });
+        res.json({ id: cardId, pregunta, respuesta, is_active: 1, teacher_id: teacherId, clase: cardClase });
     } catch (err) {
         if (connection) await connection.rollback();
         console.error("POST /cards error:", err);
@@ -143,59 +174,83 @@ app.post('/cards', authenticateToken, async (req, res) => {
     }
 });
 
-app.put('/cards/:id', authenticateToken, async (req, res) => {
-    const { id } = req.params;
-    const { pregunta, respuesta } = req.body;
+// --- TEACHER ENDPOINTS ---
 
-    if (!pregunta?.trim() || !respuesta?.trim()) {
-        return res.status(400).json({ error: 'Pregunta and respuesta are required' });
-    }
-
+// Search students by email (autocomplete)
+app.get('/teachers/students/search', authenticateToken, async (req, res) => {
+    if (req.user.role !== 'teacher') return res.status(403).json({ error: 'Forbidden' });
+    const { q } = req.query;
+    if (!q) return res.json([]);
     try {
-        await pool.query('UPDATE cards SET pregunta = ?, respuesta = ? WHERE id = ?', [pregunta, respuesta, id]);
-        res.json({ id, pregunta, respuesta });
+        const [rows] = await pool.query(
+            'SELECT id, email, name FROM users WHERE role = "student" AND email LIKE ? LIMIT 10',
+            [`%${q}%`]
+        );
+        res.json(rows);
     } catch (err) {
-        console.error("PUT /cards/:id error:", err);
         res.status(500).json({ error: err.message });
     }
 });
 
-app.post('/cards/:id/toggle-archive', authenticateToken, async (req, res) => {
-    const { id } = req.params;
-    const { is_active } = req.body;
-    const userId = req.user.id;
+// Get all distinct classes for this teacher
+app.get('/teachers/classes', authenticateToken, async (req, res) => {
+    if (req.user.role !== 'teacher') return res.status(403).json({ error: 'Forbidden' });
     try {
-        await pool.query(`
-            INSERT INTO user_cards (user_id, card_id, is_active) 
-            VALUES (?, ?, ?) 
-            ON DUPLICATE KEY UPDATE is_active = VALUES(is_active)
-        `, [userId, id, is_active]);
-        res.json({ success: true, card_id: id, is_active });
+        const [rows] = await pool.query(
+            'SELECT DISTINCT clase FROM users WHERE depende = ?',
+            [req.user.id]
+        );
+        res.json(rows.map(r => r.clase).filter(c => c !== null));
     } catch (err) {
-        console.error("POST /toggle-archive error:", err);
         res.status(500).json({ error: err.message });
     }
 });
 
-app.post('/cards/batch-archive', authenticateToken, async (req, res) => {
-    const { updates } = req.body;
-    const userId = req.user.id;
+// Get students in a class
+app.get('/teachers/classes/:className/students', authenticateToken, async (req, res) => {
+    if (req.user.role !== 'teacher') return res.status(403).json({ error: 'Forbidden' });
+    const { className } = req.params;
+    try {
+        const [rows] = await pool.query(
+            'SELECT id, email, name FROM users WHERE depende = ? AND clase = ?',
+            [req.user.id, className]
+        );
+        res.json(rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
 
-    if (!Array.isArray(updates) || updates.length === 0) {
-        return res.status(400).json({ error: 'Updates must be a non-empty array' });
+// Create/Update class and assign students
+app.post('/teachers/classes', authenticateToken, async (req, res) => {
+    if (req.user.role !== 'teacher') return res.status(403).json({ error: 'Forbidden' });
+    const { className, studentIds } = req.body;
+    if (!className || !Array.isArray(studentIds) || studentIds.length === 0) {
+        return res.status(400).json({ error: 'Class name and at least one student required' });
     }
 
     try {
-        const sql = `
-            INSERT INTO user_cards (user_id, card_id, is_active) 
-            VALUES ? 
-            ON DUPLICATE KEY UPDATE is_active = VALUES(is_active)
-        `;
-        const values = updates.map(u => [userId, u.card_id, u.is_active]);
-        await pool.query(sql, [values]);
-        res.json({ success: true, count: updates.length });
+        await pool.query(
+            'UPDATE users SET depende = ?, clase = ? WHERE id IN (?)',
+            [req.user.id, className, studentIds]
+        );
+        res.json({ success: true, message: 'Students assigned to class' });
     } catch (err) {
-        console.error("POST /batch-archive error:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Remove student from class
+app.delete('/teachers/classes/:className/students/:studentId', authenticateToken, async (req, res) => {
+    if (req.user.role !== 'teacher') return res.status(403).json({ error: 'Forbidden' });
+    const { studentId } = req.params;
+    try {
+        await pool.query(
+            'UPDATE users SET depende = NULL, clase = NULL WHERE id = ? AND depende = ?',
+            [studentId, req.user.id]
+        );
+        res.json({ success: true });
+    } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
