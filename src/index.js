@@ -239,10 +239,11 @@ app.post('/teachers/classes', authenticateToken, async (req, res) => {
         return res.status(400).json({ error: 'Class name and at least one student required' });
     }
 
+    const { institucion } = req.user;
     try {
         await pool.query(
-            'UPDATE users SET depende = ?, clase = ? WHERE id IN (?)',
-            [req.user.id, className, studentIds]
+            "UPDATE users SET depende = ?, clase = ? WHERE id IN (?) AND institucion = ?",
+            [req.user.id, className, studentIds, institucion]
         );
         res.json({ success: true, message: 'Students assigned to class' });
     } catch (err) {
