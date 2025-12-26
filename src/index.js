@@ -49,20 +49,23 @@ const generateToken = (user) => {
         email: user.email,
         role: user.role,
         depende: user.depende,
-        clase: user.clase
+        clase: user.clase,
+        institucion: user.institucion
     }, JWT_SECRET, { expiresIn: '30d' });
 };
 
 // --- AUTH ENDPOINTS ---
 
 app.post('/auth/register', async (req, res) => {
-    const { email, name, password } = req.body;
+    const { email, name, password, role, institucion } = req.body;
     try {
         const password_hash = await bcrypt.hash(password, 10);
-        // Default values for new registers
+        const finalRole = role || 'student';
+        const finalInst = institucion || '';
+
         const [result] = await pool.query(
-            "INSERT INTO users (email, name, password_hash, role, depende, clase) VALUES (?, ?, ?, ?, 0, '')",
-            [email, name, password_hash, 'student']
+            "INSERT INTO users (email, name, password_hash, role, depende, clase, institucion) VALUES (?, ?, ?, ?, 0, '', ?)",
+            [email, name, password_hash, finalRole, finalInst]
         );
 
         const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [result.insertId]);
@@ -72,7 +75,13 @@ app.post('/auth/register', async (req, res) => {
         res.status(201).json({
             message: 'User created successfully',
             token,
-            user: { id: user.id, email: user.email, name: user.name, role: user.role }
+            user: {
+                id: user.id,
+                email: user.email,
+                name: user.name,
+                role: user.role,
+                institucion: user.institucion
+            }
         });
     } catch (err) {
         if (err.code === 'ER_DUP_ENTRY') {
@@ -100,6 +109,7 @@ app.post('/auth/login', async (req, res) => {
                 email: user.email,
                 name: user.name,
                 role: user.role,
+                institucion: user.institucion,
                 depende: user.depende,
                 clase: user.clase
             }
@@ -179,12 +189,12 @@ app.post('/cards', authenticateToken, async (req, res) => {
 // Search students by email (autocomplete)
 app.get('/teachers/students/search', authenticateToken, async (req, res) => {
     if (req.user.role !== 'teacher') return res.status(403).json({ error: 'Forbidden' });
-    const { q } = req.query;
-    if (!q) return res.json([]);
+    const query = req.query.q;
+    const { institucion } = req.user;
     try {
         const [rows] = await pool.query(
-            'SELECT id, email, name FROM users WHERE role = "student" AND email LIKE ? LIMIT 10',
-            [`%${q}%`]
+            "SELECT id, email, name FROM users WHERE role = 'student' AND (email LIKE ? OR name LIKE ?) AND institucion = ? LIMIT 10",
+            [`%${query}%`, `%${query}%`, institucion]
         );
         res.json(rows);
     } catch (err) {
