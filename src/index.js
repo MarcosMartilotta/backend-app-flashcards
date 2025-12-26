@@ -61,7 +61,7 @@ app.post('/auth/register', async (req, res) => {
         const password_hash = await bcrypt.hash(password, 10);
         // Default values for new registers
         const [result] = await pool.query(
-            'INSERT INTO users (email, name, password_hash, role, depende, clase) VALUES (?, ?, ?, ?, NULL, NULL)',
+            "INSERT INTO users (email, name, password_hash, role, depende, clase) VALUES (?, ?, ?, ?, 0, '')",
             [email, name, password_hash, 'student']
         );
 
@@ -246,7 +246,7 @@ app.delete('/teachers/classes/:className/students/:studentId', authenticateToken
     const { studentId } = req.params;
     try {
         await pool.query(
-            'UPDATE users SET depende = NULL, clase = NULL WHERE id = ? AND depende = ?',
+            "UPDATE users SET depende = 0, clase = '' WHERE id = ? AND depende = ?",
             [studentId, req.user.id]
         );
         res.json({ success: true });
