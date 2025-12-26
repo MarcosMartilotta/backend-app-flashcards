@@ -61,7 +61,7 @@ app.post('/auth/register', async (req, res) => {
         const password_hash = await bcrypt.hash(password, 10);
         // Default values for new registers
         const [result] = await pool.query(
-            'INSERT INTO users (email, name, password_hash, role) VALUES (?, ?, ?, ?)',
+            'INSERT INTO users (email, name, password_hash, role, depende, clase) VALUES (?, ?, ?, ?, NULL, NULL)',
             [email, name, password_hash, 'student']
         );
 
@@ -124,7 +124,7 @@ app.get('/cards', authenticateToken, async (req, res) => {
         let params = [userId, userId];
 
         if (role === 'student' && depende) {
-            sql += ` OR (c.teacher_id = ? AND c.clase = ?) `;
+            sql += ` OR (c.teacher_id = ? AND (c.clase = ? OR c.clase = 'TODAS')) `;
             params.push(depende, clase);
         } else if (role === 'teacher') {
             sql += ` OR (c.teacher_id = ?) `;
