@@ -184,6 +184,56 @@ app.post('/cards', authenticateToken, async (req, res) => {
     }
 });
 
+app.put('/cards/:id', authenticateToken, async (req, res) => {
+    const { id } = req.params;
+    const { pregunta, respuesta } = req.body;
+    try {
+        await pool.query('UPDATE cards SET pregunta = ?, respuesta = ? WHERE id = ?', [pregunta, respuesta, id]);
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/cards/:id/toggle-archive', authenticateToken, async (req, res) => {
+    const { id } = req.params;
+    const { is_active } = req.body;
+    const userId = req.user.id;
+    try {
+        await pool.query(
+            'INSERT INTO user_cards (user_id, card_id, is_active) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE is_active = ?',
+            [userId, id, is_active, is_active]
+        );
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/cards/batch-archive', authenticateToken, async (req, res) => {
+    const { updates } = req.body;
+    const userId = req.user.id;
+    if (!Array.isArray(updates)) return res.status(400).json({ error: 'Updates must be an array' });
+
+    const connection = await pool.getConnection();
+    try {
+        await connection.beginTransaction();
+        for (const update of updates) {
+            await connection.query(
+                'INSERT INTO user_cards (user_id, card_id, is_active) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE is_active = ?',
+                [userId, update.card_id, update.is_active, update.is_active]
+            );
+        }
+        await connection.commit();
+        res.json({ success: true });
+    } catch (err) {
+        await connection.rollback();
+        res.status(500).json({ error: err.message });
+    } finally {
+        connection.release();
+    }
+});
+
 // --- TEACHER ENDPOINTS ---
 
 // Search students by email (autocomplete)
