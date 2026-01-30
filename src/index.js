@@ -316,6 +316,36 @@ app.delete('/teachers/classes/:className/students/:studentId', authenticateToken
     }
 });
 
+// --- TRANSLATION ENDPOINT ---
+
+app.post('/translate', authenticateToken, async (req, res) => {
+    const { texts, target } = req.body;
+    const apiKey = process.env.GOOGLE_TRANSLATE_KEY || "AIzaSyBItLO_Gj1rmKOkJ9jompT3kK5ScV9mDZs";
+
+    if (!texts || !Array.isArray(texts) || texts.length === 0) {
+        return res.json({ translations: [] });
+    }
+
+    try {
+        const url = `https://translation.googleapis.com/language/translate/v2?key=${apiKey}`;
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                q: texts,
+                target: target,
+                format: 'text'
+            })
+        });
+
+        const data = await response.json();
+        res.json(data);
+    } catch (err) {
+        console.error("Translation error:", err);
+        res.status(500).json({ error: "Translation failed" });
+    }
+});
+
 app.listen(3000, '0.0.0.0', () => {
     console.log('API running on puerto 3000');
 });
