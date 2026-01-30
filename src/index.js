@@ -320,7 +320,7 @@ app.delete('/teachers/classes/:className/students/:studentId', authenticateToken
 
 app.post('/translate', authenticateToken, async (req, res) => {
     const { texts, target } = req.body;
-    const apiKey = process.env.GOOGLE_TRANSLATE_KEY || "AIzaSyBItLO_Gj1rmKOkJ9jompT3kK5ScV9mDZs";
+    const apiKey = process.env.GOOGLE_TRANSLATE_KEY;
 
     if (!texts || !Array.isArray(texts) || texts.length === 0) {
         return res.json({ translations: [] });
