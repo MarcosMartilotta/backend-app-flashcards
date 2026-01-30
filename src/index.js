@@ -184,6 +184,57 @@ app.post('/cards', authenticateToken, async (req, res) => {
     }
 });
 
+app.post('/cards/bulk', authenticateToken, async (req, res) => {
+    const { cards, selectedClase } = req.body;
+    const { id: userId, role } = req.user;
+
+    if (!Array.isArray(cards) || cards.length === 0) {
+        return res.status(400).json({ error: 'Cards array is required' });
+    }
+
+    if (role !== 'teacher') {
+        return res.status(403).json({ error: 'Only teachers can bulk import' });
+    }
+
+    const connection = await pool.getConnection();
+    try {
+        await connection.beginTransaction();
+
+        const teacherId = userId;
+        const cardClase = selectedClase || null;
+
+        // Prepare bulk insert for cards
+        const cardValues = cards.map(c => [c.pregunta, c.respuesta, teacherId, cardClase]);
+        const [result] = await connection.query(
+            'INSERT INTO cards (pregunta, respuesta, teacher_id, clase) VALUES ?',
+            [cardValues]
+        );
+
+        const firstInsertId = result.insertId;
+        const affectedRows = result.affectedRows;
+
+        // Prepare user_cards linkage for the creator
+        const userCardValues = [];
+        for (let i = 0; i < affectedRows; i++) {
+            userCardValues.push([userId, firstInsertId + i, 1]);
+        }
+
+        await connection.query(
+            'INSERT INTO user_cards (user_id, card_id, is_active) VALUES ?',
+            [userCardValues]
+        );
+
+        await connection.commit();
+        res.json({ success: true, count: affectedRows });
+    } catch (err) {
+        if (connection) await connection.rollback();
+        console.error("POST /cards/bulk error:", err);
+        res.status(500).json({ error: err.message });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
 app.put('/cards/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
     const { pregunta, respuesta } = req.body;
