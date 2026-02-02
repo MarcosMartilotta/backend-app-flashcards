@@ -120,6 +120,36 @@ app.post('/auth/login', async (req, res) => {
     }
 });
 
+app.post('/auth/update-profile', authenticateToken, async (req, res) => {
+    const { email, name, institucion } = req.body;
+    const userId = req.user.id;
+    try {
+        await pool.query(
+            "UPDATE users SET email = ?, name = ?, institucion = ? WHERE id = ?",
+            [email, name, institucion, userId]
+        );
+        const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [userId]);
+        const user = rows[0];
+        res.json({
+            message: 'Profile updated successfully',
+            user: {
+                id: user.id,
+                email: user.email,
+                name: user.name,
+                role: user.role,
+                institucion: user.institucion,
+                depende: user.depende,
+                clase: user.clase
+            }
+        });
+    } catch (err) {
+        if (err.code === 'ER_DUP_ENTRY') {
+            return res.status(400).json({ error: 'Email already exists' });
+        }
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // --- CARD ENDPOINTS ---
 
 app.get('/cards', authenticateToken, async (req, res) => {
@@ -161,9 +191,9 @@ app.post('/cards', authenticateToken, async (req, res) => {
     try {
         await connection.beginTransaction();
 
-        // If teacher, save teacher_id and clase
-        const teacherId = role === 'teacher' ? userId : null;
-        const cardClase = (role === 'teacher' && selectedClase) ? selectedClase : null;
+        // All cards store the creator in teacher_id (used as owner)
+        const teacherId = userId;
+        const cardClase = (role === 'teacher' && selectedClase) ? selectedClase : '';
 
         const [result] = await connection.query(
             'INSERT INTO cards (pregunta, respuesta, teacher_id, clase) VALUES (?, ?, ?, ?)',
@@ -201,7 +231,7 @@ app.post('/cards/bulk', authenticateToken, async (req, res) => {
         await connection.beginTransaction();
 
         const teacherId = userId;
-        const cardClase = selectedClase || null;
+        const cardClase = selectedClase || '';
 
         // Prepare bulk insert for cards
         const cardValues = cards.map(c => [c.pregunta, c.respuesta, teacherId, cardClase]);
@@ -237,9 +267,20 @@ app.post('/cards/bulk', authenticateToken, async (req, res) => {
 
 app.put('/cards/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
-    const { pregunta, respuesta } = req.body;
+    const { pregunta, respuesta, selectedClase } = req.body;
+    const userId = req.user.id;
+    const role = req.user.role;
     try {
-        await pool.query('UPDATE cards SET pregunta = ?, respuesta = ? WHERE id = ?', [pregunta, respuesta, id]);
+        const [rows] = await pool.query('SELECT teacher_id FROM cards WHERE id = ?', [id]);
+        if (rows.length === 0) return res.status(404).json({ error: 'Card not found' });
+        if (rows[0].teacher_id !== userId) return res.status(403).json({ error: 'Not authorized to edit this card' });
+
+        const cardClase = (role === 'teacher' && selectedClase) ? selectedClase : '';
+
+        await pool.query(
+            'UPDATE cards SET pregunta = ?, respuesta = ?, clase = ? WHERE id = ?',
+            [pregunta, respuesta, cardClase, id]
+        );
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
