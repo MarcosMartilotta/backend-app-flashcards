@@ -49,23 +49,23 @@ const generateToken = (user) => {
         email: user.email,
         role: user.role,
         depende: user.depende,
-        clase: user.clase,
-        institucion: user.institucion
+        institucion: user.institucion,
+        avatar: user.avatar
     }, JWT_SECRET, { expiresIn: '30d' });
 };
 
 // --- AUTH ENDPOINTS ---
 
 app.post('/auth/register', async (req, res) => {
-    const { email, name, password, role, institucion } = req.body;
+    const { email, name, password, role, institucion, avatar } = req.body;
     try {
         const password_hash = await bcrypt.hash(password, 10);
         const finalRole = role || 'student';
         const finalInst = institucion || '';
 
         const [result] = await pool.query(
-            "INSERT INTO users (email, name, password_hash, role, depende, clase, institucion) VALUES (?, ?, ?, ?, 0, '', ?)",
-            [email, name, password_hash, finalRole, finalInst]
+            "INSERT INTO users (email, name, password_hash, role, depende, clase, institucion, avatar) VALUES (?, ?, ?, ?, 0, '', ?, ?)",
+            [email, name, password_hash, finalRole, finalInst, avatar || 'avatar1']
         );
 
         const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [result.insertId]);
@@ -80,7 +80,8 @@ app.post('/auth/register', async (req, res) => {
                 email: user.email,
                 name: user.name,
                 role: user.role,
-                institucion: user.institucion
+                institucion: user.institucion,
+                avatar: user.avatar
             }
         });
     } catch (err) {
@@ -111,7 +112,8 @@ app.post('/auth/login', async (req, res) => {
                 role: user.role,
                 institucion: user.institucion,
                 depende: user.depende,
-                clase: user.clase
+                clase: user.clase,
+                avatar: user.avatar
             }
         });
     } catch (err) {
@@ -121,12 +123,12 @@ app.post('/auth/login', async (req, res) => {
 });
 
 app.post('/auth/update-profile', authenticateToken, async (req, res) => {
-    const { email, name, institucion } = req.body;
+    const { email, name, institucion, avatar } = req.body;
     const userId = req.user.id;
     try {
         await pool.query(
-            "UPDATE users SET email = ?, name = ?, institucion = ? WHERE id = ?",
-            [email, name, institucion, userId]
+            "UPDATE users SET email = ?, name = ?, institucion = ?, avatar = ? WHERE id = ?",
+            [email, name, institucion, avatar, userId]
         );
         const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [userId]);
         const user = rows[0];
@@ -139,7 +141,8 @@ app.post('/auth/update-profile', authenticateToken, async (req, res) => {
                 role: user.role,
                 institucion: user.institucion,
                 depende: user.depende,
-                clase: user.clase
+                clase: user.clase,
+                avatar: user.avatar
             }
         });
     } catch (err) {
