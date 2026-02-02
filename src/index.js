@@ -273,7 +273,11 @@ app.put('/cards/:id', authenticateToken, async (req, res) => {
     try {
         const [rows] = await pool.query('SELECT teacher_id FROM cards WHERE id = ?', [id]);
         if (rows.length === 0) return res.status(404).json({ error: 'Card not found' });
-        if (rows[0].teacher_id !== userId) return res.status(403).json({ error: 'Not authorized to edit this card' });
+
+        // Teachers can edit any card they see. Students only their own.
+        if (role !== 'teacher' && rows[0].teacher_id !== userId) {
+            return res.status(403).json({ error: 'Not authorized to edit this card' });
+        }
 
         const cardClase = (role === 'teacher' && selectedClase) ? selectedClase : '';
 
