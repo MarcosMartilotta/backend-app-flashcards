@@ -54,6 +54,11 @@ const generateToken = (user) => {
     }, JWT_SECRET, { expiresIn: '30d' });
 };
 
+// --- HEALTH CHECK ---
+app.get('/', (req, res) => {
+    res.json({ status: 'ok', message: 'API running' });
+});
+
 // --- AUTH ENDPOINTS ---
 
 app.post('/auth/register', async (req, res) => {
